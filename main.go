@@ -14,6 +14,7 @@ import (
 
 	"github.com/akamensky/argparse"
 	"github.com/mitchellh/go-homedir"
+	"github.com/robert-nix/ansihtml"
 	logging "github.com/saizo80/go-logging"
 	"golang.org/x/term"
 )
@@ -44,6 +45,7 @@ func main() {
 	roomId := parser.String("r", "room", &argparse.Options{Required: false, Help: "room id (i.e. !abc123:matrix.org)"})
 	bSend := parser.Flag("s", "send", &argparse.Options{Required: false, Help: "send message (requires --room and --message or piped input)"})
 	message := parser.String("m", "message", &argparse.Options{Required: false, Help: "message to send (requires --send)"})
+	ansi := parser.Flag("", "ansi", &argparse.Options{Required: false, Help: "enable ansi escape codes"})
 	err = parser.Parse(os.Args)
 	if err != nil {
 		fmt.Print(parser.Usage(err))
@@ -99,8 +101,13 @@ func main() {
 				os.Exit(1)
 			}
 		}
+		log.Debug("sending message: %s", *message)
 		println("sending message...")
-		sendMessage(credentialsMap, *roomId, *message)
+		err := sendMessage(credentialsMap, *roomId, *message, *ansi)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -161,16 +168,27 @@ func post(urlString string, bodyMap interface{}, accessToken string) (*http.Resp
 	return response, nil
 }
 
-func sendMessage(credentialsMap map[string]string, roomId string, message string) error {
+func parseAnsi(message string) string {
+	html := string(ansihtml.ConvertToHTML([]byte(message)))
+	return fmt.Sprintf("<pre>%s</pre>", html)
+}
+
+func sendMessage(credentialsMap map[string]string, roomId string, message string, ansi bool) error {
 	url := fmt.Sprintf("https://%s/_matrix/client/r0/rooms/%s/send/m.room.message", credentialsMap["home_server"], roomId)
 	message = strings.ReplaceAll(message, "\\n", "\n")
 	message = strings.ReplaceAll(message, "\\t", "\t")
-
 	// replace quotes with unicode quotes
-	message = strings.ReplaceAll(message, "\"", "”")
+	// message = strings.ReplaceAll(message, "\"", "”")
 	jsonBodyMap := map[string]interface{}{
 		"msgtype": "m.text",
 		"body":    message,
+	}
+	if ansi {
+		jsonBodyMap["format"] = "org.matrix.custom.html"
+		jsonBodyMap["formatted_body"] = parseAnsi(message)
+	}
+	for key, value := range jsonBodyMap {
+		log.Debug("%s: %s", key, value)
 	}
 	_, err := post(url, jsonBodyMap, credentialsMap["access_token"])
 	if err != nil {
@@ -453,6 +471,7 @@ func getPipedInput() (string, error) {
 	}
 	// trim trailing newline
 	returnString := buffer.String()
+	log.Debug("returnString: %s", returnString)
 	returnString = strings.TrimSuffix(returnString, "\n")
 	return returnString, nil
 }
