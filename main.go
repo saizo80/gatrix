@@ -99,8 +99,7 @@ func main() {
 				os.Exit(1)
 			}
 		}
-		log.Debug("message: %s\n", *message)
-		log.Debug("room id: %s\n", *roomId)
+		println("sending message...")
 		sendMessage(credentialsMap, *roomId, *message)
 	}
 }
