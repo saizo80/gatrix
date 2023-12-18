@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/akamensky/argparse"
 	"github.com/mitchellh/go-homedir"
 	"golang.org/x/term"
 )
@@ -182,6 +183,7 @@ func login() {
 }
 
 func listRooms(credentials map[string]string) error {
+	println("getting room data...")
 	url := fmt.Sprintf("https://%s/_matrix/client/r0/sync", credentials["home_server"])
 	response, err := getWithAuth(url, credentials["access_token"])
 	if err != nil {
@@ -209,7 +211,8 @@ func listRooms(credentials map[string]string) error {
 		os.Exit(1)
 	}
 	rooms := bodyMap["rooms"].(map[string]interface{})
-	if bodyMap["rooms"] != nil {
+	if rooms["join"] != nil {
+		println("joined rooms:")
 		join := rooms["join"].(map[string]interface{})
 		for key, value := range join {
 			room := value.(map[string]interface{})
@@ -222,19 +225,51 @@ func listRooms(credentials map[string]string) error {
 					name = eventMap["content"].(map[string]interface{})["name"].(string)
 				}
 			}
+			if name == "" {
+				name = "<Unnamed room>"
+			}
 			fmt.Printf("%s: %s\n", key, name)
 		}
+		println()
+	} else {
+		println("no joined rooms")
 	}
-	if rooms["invite"] == nil {
-		println("no invites")
-		return nil
-	}
-	invite := rooms["invite"].(map[string]interface{})
-	for key, value := range invite {
-		room := value.(map[string]interface{})
-		fmt.Printf("%s: %s\n", key, room["name"])
+	if rooms["invite"] != nil {
+		invite := rooms["invite"].(map[string]interface{})
+		println("invited rooms:")
+		for key, value := range invite {
+			room := value.(map[string]interface{})
+			state := room["state"].(map[string]interface{})
+			events := state["events"].([]interface{})
+			name := ""
+			for _, event := range events {
+				eventMap := event.(map[string]interface{})
+				if eventMap["type"].(string) == "m.room.name" {
+					name = eventMap["content"].(map[string]interface{})["name"].(string)
+				}
+			}
+			if name == "" {
+				name = "<Unnamed room>"
+			}
+			fmt.Printf("%s: %s\n", key, name)
+		}
+	} else {
+		println("no invited rooms")
 	}
 	return nil
+}
+
+func readConfigFile(path string) (map[string]string, error) {
+	credentials, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	credentialsMap := make(map[string]string)
+	err = json.Unmarshal(credentials, &credentialsMap)
+	if err != nil {
+		return nil, err
+	}
+	return credentialsMap, nil
 }
 
 func main() {
@@ -244,31 +279,25 @@ func main() {
 		os.Exit(1)
 	}
 	credentialsPath := fmt.Sprintf("%s/.config/gatrix", homeDir)
-	// if credentials file exists, read it and use it
-	// else, prompt the user to run login
 	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
-		println("credentials file does not exist")
-	} else {
-		credentialsFile, err := os.Open(credentialsPath)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		defer credentialsFile.Close()
-		credentials, err := io.ReadAll(credentialsFile)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		var credentialsMap map[string]string
-		err = json.Unmarshal(credentials, &credentialsMap)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		for key, value := range credentialsMap {
-			fmt.Printf("%s: %s\n", key, value)
-		}
+		fmt.Println("credentials cannot be found, please run login with --login")
+		return
+	}
+	credentialsMap, err := readConfigFile(credentialsPath)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	parser := argparse.NewParser("gatrix", "A command line matrix client")
+	bLogin := parser.Flag("l", "login", &argparse.Options{Required: false, Help: "login to matrix server"})
+	list := parser.Flag("", "list-rooms", &argparse.Options{Required: false, Help: "list rooms"})
+	err = parser.Parse(os.Args)
+	if err != nil {
+		fmt.Print(parser.Usage(err))
+	}
+	if *bLogin {
+		login()
+	} else if *list {
 		listRooms(credentialsMap)
 	}
 }
