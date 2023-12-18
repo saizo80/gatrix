@@ -14,11 +14,51 @@ import (
 
 	"github.com/akamensky/argparse"
 	"github.com/mitchellh/go-homedir"
+	logging "github.com/saizo80/go-logging"
 	"golang.org/x/term"
 )
 
+var (
+	log *logging.Logger
+)
+
+func main() {
+	log = logging.New(logging.INFO)
+	homeDir, err := homedir.Dir()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	credentialsPath := fmt.Sprintf("%s/.config/gatrix", homeDir)
+	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
+		fmt.Println("credentials cannot be found, please run login with --login")
+		return
+	}
+	credentialsMap, err := readConfigFile(credentialsPath)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	parser := argparse.NewParser("gatrix", "A command line matrix client")
+	bLogin := parser.Flag("l", "login", &argparse.Options{Required: false, Help: "login to matrix server"})
+	list := parser.Flag("", "list-rooms", &argparse.Options{Required: false, Help: "list rooms"})
+	debug := parser.Flag("d", "debug", &argparse.Options{Required: false, Help: "enable debug logging"})
+	err = parser.Parse(os.Args)
+	if err != nil {
+		fmt.Print(parser.Usage(err))
+	}
+	if *debug {
+		log.SetLevel(logging.DEBUG)
+	}
+	if *bLogin {
+		login()
+	} else if *list {
+		listRooms(credentialsMap)
+	}
+}
+
 func getFail(url string) bool {
-	fmt.Printf("GET %s\n", url)
+	log.Debug("GET %s\n", url)
 	response, err := http.Get(url)
 	if err != nil || response.StatusCode != 200 {
 		return false
@@ -27,7 +67,7 @@ func getFail(url string) bool {
 }
 
 func get(url string) (*http.Response, error) {
-	fmt.Printf("GET %s\n", url)
+	log.Debug("GET %s\n", url)
 	response, err := http.Get(url)
 	if err != nil || response.StatusCode != 200 {
 		return nil, err
@@ -36,7 +76,7 @@ func get(url string) (*http.Response, error) {
 }
 
 func getWithAuth(url string, accessToken string) (*http.Response, error) {
-	fmt.Printf("GET %s\n", url)
+	log.Debug("GET %s\n", url)
 	request, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -50,7 +90,7 @@ func getWithAuth(url string, accessToken string) (*http.Response, error) {
 }
 
 func post(urlString string, bodyMap interface{}) (*http.Response, error) {
-	fmt.Printf("POST %s\n", urlString)
+	log.Debug("POST %s\n", urlString)
 	body, err := json.Marshal(bodyMap)
 	if err != nil {
 		return nil, err
@@ -276,34 +316,4 @@ func readConfigFile(path string) (map[string]string, error) {
 		return nil, err
 	}
 	return credentialsMap, nil
-}
-
-func main() {
-	homeDir, err := homedir.Dir()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	credentialsPath := fmt.Sprintf("%s/.config/gatrix", homeDir)
-	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
-		fmt.Println("credentials cannot be found, please run login with --login")
-		return
-	}
-	credentialsMap, err := readConfigFile(credentialsPath)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	parser := argparse.NewParser("gatrix", "A command line matrix client")
-	bLogin := parser.Flag("l", "login", &argparse.Options{Required: false, Help: "login to matrix server"})
-	list := parser.Flag("", "list-rooms", &argparse.Options{Required: false, Help: "list rooms"})
-	err = parser.Parse(os.Args)
-	if err != nil {
-		fmt.Print(parser.Usage(err))
-	}
-	if *bLogin {
-		login()
-	} else if *list {
-		listRooms(credentialsMap)
-	}
 }
