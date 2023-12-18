@@ -39,8 +39,9 @@ func main() {
 	bLogin := parser.Flag("l", "login", &argparse.Options{Required: false, Help: "login to matrix server"})
 	list := parser.Flag("", "list-rooms", &argparse.Options{Required: false, Help: "list rooms"})
 	debug := parser.Flag("d", "debug", &argparse.Options{Required: false, Help: "enable debug logging"})
-	join := parser.Flag("j", "join", &argparse.Options{Required: false, Help: "join room (requires --room-id)"})
-	roomId := parser.String("r", "room-id", &argparse.Options{Required: false, Help: "room id"})
+	join := parser.Flag("j", "join", &argparse.Options{Required: false, Help: "join room (requires --room)"})
+	leave := parser.Flag("", "leave", &argparse.Options{Required: false, Help: "leave room (requires --room)"})
+	roomId := parser.String("r", "room", &argparse.Options{Required: false, Help: "room id (i.e. !abc123:matrix.org)"})
 	err = parser.Parse(os.Args)
 	if err != nil {
 		fmt.Print(parser.Usage(err))
@@ -68,6 +69,12 @@ func main() {
 			os.Exit(0)
 		}
 		joinRoom(credentialsMap, *roomId)
+	} else if *leave {
+		if *roomId == "" {
+			fmt.Println("room id is required")
+			os.Exit(0)
+		}
+		leaveRoom(credentialsMap, *roomId)
 	}
 }
 
@@ -358,6 +365,15 @@ func listRooms(credentials map[string]string) error {
 
 func joinRoom(credentials map[string]string, roomId string) error {
 	url := fmt.Sprintf("https://%s/_matrix/client/r0/join/%s", credentials["home_server"], roomId)
+	_, err := post(url, map[string]interface{}{}, credentials["access_token"])
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func leaveRoom(credentials map[string]string, roomId string) error {
+	url := fmt.Sprintf("https://%s/_matrix/client/r0/rooms/%s/leave", credentials["home_server"], roomId)
 	_, err := post(url, map[string]interface{}{}, credentials["access_token"])
 	if err != nil {
 		return err
