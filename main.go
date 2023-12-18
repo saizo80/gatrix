@@ -118,7 +118,10 @@ func post(urlString string, bodyMap interface{}) (*http.Response, error) {
 func makeIdentifier() string {
 	// get username from environment
 	lUser := os.Getenv("USER")
-	lHostName := os.Getenv("HOSTNAME")
+	lHostName, err := os.Hostname()
+	if err != nil {
+		lHostName = ""
+	}
 	return fmt.Sprintf("%s@%s using go-matrix", lUser, lHostName)
 }
 
