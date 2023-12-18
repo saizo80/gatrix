@@ -207,12 +207,14 @@ func printMatrixError(response *http.Response) {
 	var bodyMap map[string]interface{}
 	err = json.Unmarshal(body, &bodyMap)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("error parsing response body")
+		log.Debug(err)
+		log.Debug(string(body))
 		os.Exit(1)
 	}
 	errcode := bodyMap["errcode"].(string)
 	errorMessage := bodyMap["error"].(string)
-	fmt.Printf("error: %s (%s)\n", errorMessage, errcode)
+	log.Error("%s (%s)", errorMessage, errcode)
 }
 
 func makeIdentifier() string {
