@@ -22,6 +22,10 @@ var (
 	log *logging.Logger
 )
 
+const (
+	dummyAuth = "X-Dummy: 1"
+)
+
 func main() {
 	log = logging.New(logging.INFO)
 	homeDir, err := homedir.Dir()
@@ -30,19 +34,13 @@ func main() {
 		os.Exit(1)
 	}
 	credentialsPath := fmt.Sprintf("%s/.config/gatrix", homeDir)
-	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
-		fmt.Println("credentials cannot be found, please run login with --login")
-		return
-	}
-	credentialsMap, err := readConfigFile(credentialsPath)
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+
 	parser := argparse.NewParser("gatrix", "A command line matrix client")
 	bLogin := parser.Flag("l", "login", &argparse.Options{Required: false, Help: "login to matrix server"})
 	list := parser.Flag("", "list-rooms", &argparse.Options{Required: false, Help: "list rooms"})
 	debug := parser.Flag("d", "debug", &argparse.Options{Required: false, Help: "enable debug logging"})
+	join := parser.Flag("j", "join", &argparse.Options{Required: false, Help: "join room (requires --room-id)"})
+	roomId := parser.String("r", "room-id", &argparse.Options{Required: false, Help: "room id"})
 	err = parser.Parse(os.Args)
 	if err != nil {
 		fmt.Print(parser.Usage(err))
@@ -52,45 +50,54 @@ func main() {
 	}
 	if *bLogin {
 		login()
-	} else if *list {
+	}
+	if _, err := os.Stat(credentialsPath); os.IsNotExist(err) {
+		fmt.Println("credentials cannot be found, please run login with --login")
+		return
+	}
+	credentialsMap, err := readConfigFile(credentialsPath)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	if *list {
 		listRooms(credentialsMap)
+	} else if *join {
+		if *roomId == "" {
+			fmt.Println("room id is required")
+			os.Exit(0)
+		}
+		joinRoom(credentialsMap, *roomId)
 	}
 }
 
-func getFail(url string) bool {
-	log.Debug("GET %s\n", url)
-	response, err := http.Get(url)
-	if err != nil || response.StatusCode != 200 {
-		return false
+func get(url string, accessToken string) (*http.Response, error) {
+	if accessToken == "" {
+		accessToken = dummyAuth
 	}
-	return true
-}
-
-func get(url string) (*http.Response, error) {
-	log.Debug("GET %s\n", url)
-	response, err := http.Get(url)
-	if err != nil || response.StatusCode != 200 {
-		return nil, err
-	}
-	return response, nil
-}
-
-func getWithAuth(url string, accessToken string) (*http.Response, error) {
-	log.Debug("GET %s\n", url)
+	log.Debug("GET %s", url)
 	request, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 	request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
 	response, err := http.DefaultClient.Do(request)
-	if err != nil || response.StatusCode != 200 {
+	if err != nil {
 		return nil, err
+	}
+	if response.StatusCode != 200 {
+		println("an error occurred while communicating with the server")
+		printMatrixError(response)
+		os.Exit(2)
 	}
 	return response, nil
 }
 
-func post(urlString string, bodyMap interface{}) (*http.Response, error) {
-	log.Debug("POST %s\n", urlString)
+func post(urlString string, bodyMap interface{}, accessToken string) (*http.Response, error) {
+	if accessToken == "" {
+		accessToken = dummyAuth
+	}
+	log.Debug("POST %s", urlString)
 	body, err := json.Marshal(bodyMap)
 	if err != nil {
 		return nil, err
@@ -105,14 +112,38 @@ func post(urlString string, bodyMap interface{}) (*http.Response, error) {
 		URL:    url,
 		Body:   bodyReader,
 		Header: map[string][]string{
-			"Content-Type": {"application/json"},
+			"Content-Type":  {"application/json"},
+			"Authorization": {fmt.Sprintf("Bearer %s", accessToken)},
 		},
 	}
 	response, err := http.DefaultClient.Do(request)
-	if err != nil || response.StatusCode != 200 {
+	if err != nil {
 		return nil, err
 	}
+	if response.StatusCode != 200 {
+		println("an error occurred while communicating with the server")
+		printMatrixError(response)
+		os.Exit(2)
+	}
 	return response, nil
+}
+
+func printMatrixError(response *http.Response) {
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	// convert body to map
+	var bodyMap map[string]interface{}
+	err = json.Unmarshal(body, &bodyMap)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	errcode := bodyMap["errcode"].(string)
+	errorMessage := bodyMap["error"].(string)
+	fmt.Printf("error: %s (%s)\n", errorMessage, errcode)
 }
 
 func makeIdentifier() string {
@@ -122,7 +153,7 @@ func makeIdentifier() string {
 	if err != nil {
 		lHostName = ""
 	}
-	return fmt.Sprintf("%s@%s using go-matrix", lUser, lHostName)
+	return fmt.Sprintf("%s@%s using gatrix", lUser, lHostName)
 }
 
 func credentials() (string, string, string, error) {
@@ -136,8 +167,12 @@ func credentials() (string, string, string, error) {
 	serverAddress = strings.TrimSuffix(serverAddress, "\n") // strip trailing newline
 	serverAddress = fmt.Sprintf("https://%s", strings.TrimPrefix(serverAddress, "https://"))
 	serverAddress = strings.TrimSuffix(serverAddress, "/") // strip trailing slash
-	if !getFail(fmt.Sprintf("%s/_matrix/client/versions", serverAddress)) {
-		fmt.Printf("Server %s does not appear to be a matrix server\n", serverAddress)
+	response, err := get(fmt.Sprintf("%s/_matrix/client/versions", serverAddress), "")
+	if err != nil {
+		return "", "", "", err
+	}
+	if response.StatusCode != 200 {
+		fmt.Printf("response status code: %d\n", response.StatusCode)
 		os.Exit(1)
 	}
 
@@ -164,7 +199,6 @@ func login() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	fmt.Printf("username: %s\nPassword: %s\nUrl: %s\n", username, password, serverAddress)
 	jsonBodyMap := interface{}(map[string]interface{}{
 		"type": "m.login.password",
 		"identifier": map[string]interface{}{
@@ -174,9 +208,13 @@ func login() {
 		"password":                    password,
 		"initial_device_display_name": makeIdentifier(),
 	})
-	response, err := post(fmt.Sprintf("%s/_matrix/client/r0/login", serverAddress), jsonBodyMap)
+	response, err := post(fmt.Sprintf("%s/_matrix/client/r0/login", serverAddress), jsonBodyMap, "")
 	if err != nil {
 		fmt.Println(err)
+		os.Exit(1)
+	}
+	if response.StatusCode != 200 {
+		fmt.Printf("response status code: %d\n", response.StatusCode)
 		os.Exit(1)
 	}
 	defer response.Body.Close()
@@ -234,7 +272,7 @@ func login() {
 func listRooms(credentials map[string]string) error {
 	println("getting room data...")
 	url := fmt.Sprintf("https://%s/_matrix/client/r0/sync", credentials["home_server"])
-	response, err := getWithAuth(url, credentials["access_token"])
+	response, err := get(url, credentials["access_token"])
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -275,6 +313,16 @@ func listRooms(credentials map[string]string) error {
 				}
 			}
 			if name == "" {
+				timeline := room["timeline"].(map[string]interface{})
+				events := timeline["events"].([]interface{})
+				for _, event := range events {
+					eventMap := event.(map[string]interface{})
+					if eventMap["type"].(string) == "m.room.name" {
+						name = eventMap["content"].(map[string]interface{})["name"].(string)
+					}
+				}
+			}
+			if name == "" {
 				name = "<Unnamed room>"
 			}
 			fmt.Printf("%s: %s\n", key, name)
@@ -288,7 +336,7 @@ func listRooms(credentials map[string]string) error {
 		println("invited rooms:")
 		for key, value := range invite {
 			room := value.(map[string]interface{})
-			state := room["state"].(map[string]interface{})
+			state := room["invite_state"].(map[string]interface{})
 			events := state["events"].([]interface{})
 			name := ""
 			for _, event := range events {
@@ -304,6 +352,15 @@ func listRooms(credentials map[string]string) error {
 		}
 	} else {
 		println("no invited rooms")
+	}
+	return nil
+}
+
+func joinRoom(credentials map[string]string, roomId string) error {
+	url := fmt.Sprintf("https://%s/_matrix/client/r0/join/%s", credentials["home_server"], roomId)
+	_, err := post(url, map[string]interface{}{}, credentials["access_token"])
+	if err != nil {
+		return err
 	}
 	return nil
 }
