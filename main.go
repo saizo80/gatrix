@@ -42,6 +42,8 @@ func main() {
 	join := parser.Flag("j", "join", &argparse.Options{Required: false, Help: "join room (requires --room)"})
 	leave := parser.Flag("", "leave", &argparse.Options{Required: false, Help: "leave room (requires --room)"})
 	roomId := parser.String("r", "room", &argparse.Options{Required: false, Help: "room id (i.e. !abc123:matrix.org)"})
+	bSend := parser.Flag("s", "send", &argparse.Options{Required: false, Help: "send message (requires --room and --message or piped input)"})
+	message := parser.String("m", "message", &argparse.Options{Required: false, Help: "message to send (requires --send)"})
 	err = parser.Parse(os.Args)
 	if err != nil {
 		fmt.Print(parser.Usage(err))
@@ -66,6 +68,11 @@ func main() {
 	} else if *join {
 		if *roomId == "" {
 			fmt.Println("room id is required")
+			err := listRooms(credentialsMap)
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
 			os.Exit(0)
 		}
 		joinRoom(credentialsMap, *roomId)
@@ -75,6 +82,26 @@ func main() {
 			os.Exit(0)
 		}
 		leaveRoom(credentialsMap, *roomId)
+	} else if *bSend {
+		if *roomId == "" {
+			fmt.Println("room id is required")
+			err := listRooms(credentialsMap)
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+		if *message == "" {
+			*message, err = getPipedInput()
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+		}
+		log.Debug("message: %s\n", *message)
+		log.Debug("room id: %s\n", *roomId)
+		sendMessage(credentialsMap, *roomId, *message)
 	}
 }
 
@@ -133,6 +160,24 @@ func post(urlString string, bodyMap interface{}, accessToken string) (*http.Resp
 		os.Exit(2)
 	}
 	return response, nil
+}
+
+func sendMessage(credentialsMap map[string]string, roomId string, message string) error {
+	url := fmt.Sprintf("https://%s/_matrix/client/r0/rooms/%s/send/m.room.message", credentialsMap["home_server"], roomId)
+	message = strings.ReplaceAll(message, "\\n", "\n")
+	message = strings.ReplaceAll(message, "\\t", "\t")
+
+	// replace quotes with unicode quotes
+	message = strings.ReplaceAll(message, "\"", "”")
+	jsonBodyMap := map[string]interface{}{
+		"msgtype": "m.text",
+		"body":    message,
+	}
+	_, err := post(url, jsonBodyMap, credentialsMap["access_token"])
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func printMatrixError(response *http.Response) {
@@ -392,4 +437,23 @@ func readConfigFile(path string) (map[string]string, error) {
 		return nil, err
 	}
 	return credentialsMap, nil
+}
+
+func getPipedInput() (string, error) {
+	reader := bufio.NewReader(os.Stdin)
+	var buffer bytes.Buffer
+	for {
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", err
+		}
+		buffer.WriteString(input)
+	}
+	// trim trailing newline
+	returnString := buffer.String()
+	returnString = strings.TrimSuffix(returnString, "\n")
+	return returnString, nil
 }
