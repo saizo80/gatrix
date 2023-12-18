@@ -180,6 +180,12 @@ func login() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+	// change permissions to 600
+	err = os.Chmod(path, 0600)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
 }
 
 func listRooms(credentials map[string]string) error {
